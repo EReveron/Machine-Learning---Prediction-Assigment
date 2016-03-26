@@ -1,8 +1,8 @@
 # Machine-Learning---Prediction-Assigment
 
-Please check the submission assigment on the following formats:
+Please check the following links related with the submission assigment in different formats:
 
-Rmd:
+md:
 https://github.com/EReveron/Machine-Learning---Prediction-Assigment/blob/master/Machine_Learning_Project.md
 
 RPubs:
