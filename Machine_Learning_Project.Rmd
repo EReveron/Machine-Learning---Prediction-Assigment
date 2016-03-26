@@ -1,0 +1,414 @@
+---
+title: "Machine Learning - Prediction Assigment"
+author: "Enrique Reveron"
+date: "March 26, 2016"
+output:
+  html_document:
+    fig_height: 4
+    fig_width: 9
+    keep_md: yes
+    theme: default
+  pdf_document: default
+  word_document: default
+---
+
+
+## Executive Summary
+
+This is a project report related with the Machine Learning Course, the target is to predict the **classe** variable (the manner in which they did the exercise) in the training set.
+
+The report include the following sections:
+
+1. Load the Training and Test Data and perform some basic exploratory data analyses.
+2. Make some transformation to the data.
+3. Build a model to predict the **classe** variable.
+4. Use the best model with the Test Data to provide a Prediction.
+5. State your conclusions.
+
+
+## 1. Load the Training and Testing data and perform some basic exploratory data analyses.
+
+Load the neccesary libraries and the datasets, let's see some general information about the data.
+
+```{r echo=TRUE}
+# Load the neccesary libraries
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+library(randomForest)
+# For reproducibility
+set.seed(12345)
+setwd("D:/Coursera/Machine Learning")
+# Load the Training Data 
+if (file.exists("training_data.RData")) {
+    load("training_data.RData")
+} else {
+  if (!file.exists("pml-training.csv")) {
+    stop("no valid training data file in working directory: pml-training.csv")
+  }
+  training_data <- read.csv("pml-training.csv",
+                          na.strings=c("NA","#DIV/0!",""),
+                            stringsAsFactors = FALSE)
+  save(training_data,file="training_data.RData")
+}
+# Load the Testing Data 
+if (file.exists("testing_data.RData")) {
+    load("testing_data.RData")
+} else {
+  if (!file.exists("pml-testing.csv")) {
+    stop("no valid testing data file in working directory: pml-testing.csv")
+  }
+  testing_data <- read.csv("pml-testing.csv",
+                            na.strings=c("NA","#DIV/0!",""),
+                            stringsAsFactors = FALSE)
+  save(testing_data,file="testing_data.RData")
+}
+# Set classe as factor
+training_data$classe <- as.factor(training_data$classe)
+# Show some information about the data
+dim(training_data)
+dim(testing_data)
+# How many classes have the varible to predict
+summary(training_data$classe)
+```
+
+We can see that the **Training Dataset** include **19622 rows and 160 variables** and the **Testing Dataset** include **20 rows and 160 variables**.
+The **classe** variable (the one to predict) include five classes (A,B,C,D and E).
+
+According with the information related with the data:
+
+### 1.1 Description
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+### 1.2 The meaning of **classe**
+
+A: exactly according to the specification.
+
+B: throwing the elbows to the front.
+
+C: lifting the dumbbell only halfway.
+
+D: lowering the dumbbell only halfway.
+
+E: throwing the hips to the front.
+
+### 1.3 Dataset Source 
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+http://groupware.les.inf.puc-rio.br/har
+
+
+## 2. Cleaning the Data.
+
+### 2.1 Remove NAs Variables.
+
+Let's see the structure of the Training data:
+```{r echo=TRUE}
+str(training_data)
+```
+
+We can see that exists many variables that have many NAs values. Let's remove the ones that have significant NAs values.
+```{r echo=TRUE}
+NA_variables <- apply(training_data,2,function(x) {sum(is.na(x))}) 
+# Let's see the frequency of NA values per variable of the data
+as.data.frame(table(NA_variables))
+```
+
+We can see that 60 variables have 0 NA values, the rest (100 variables) have more than 19216 NAs values (more than 97%). So let's remove those variables from the data and only keep the ones that have 0 NAs values (**60 variables**)
+```{r echo=TRUE}
+training_data <- training_data[,which(NA_variables == 0)]
+testing_data <- testing_data[,which(NA_variables == 0)]
+dim(training_data);dim(testing_data)
+```
+
+We remove 100 variables, the data only have **60 variables** now. 
+
+### 2.2 Remove Non Usefull Variables. 
+
+The first seven (7) variables are not related with the motion sensors, so we can remove it.
+```{r echo=TRUE}
+colnames(training_data)[1:7]
+training_data <- training_data[,8:length(colnames(training_data))]
+testing_data <- testing_data[,8:length(colnames(testing_data))]
+dim(training_data);dim(testing_data)
+```
+
+We remove 7 variables, the data only have **53 variables** now. 
+
+### 2.3 Remove Near Zero Variance Variables.
+Lets check if exists Near Zero Variance variables:
+```{r echo=TRUE}
+nzv_var <- nearZeroVar(training_data, saveMetrics=TRUE)
+nzv_var
+```
+We can see that doesn't exist near zero variance variables because **the nzv value is FALSE**. So is not neccesary to remove variables.
+
+### 2.4 Data Splitting.
+In order to create a model, we will split the training data into Training (60%) and testing (40%) Data Set.
+```{r echo=TRUE}
+inTrain <- createDataPartition(y=training_data$classe, p=0.6, list= FALSE)
+# Create Training and Testing
+training <- training_data[inTrain,]
+testing <-  training_data[-inTrain,]
+
+dim(training);dim(testing)
+```
+
+We can see that the training data have **11776 rows** and the testing data **7846 rows**.
+
+## 3. Create a Model.
+
+We will use two main algorithms in order to build the prediction model: **Recursive Partitioning (RPART) and Random Forest (RF)**. Let's create the different models.
+
+### 3.1 Model Using Recursive Partitioning (RPART) (whithout Pre-processing or Cross Validation features).
+
+Let's use the RPART Method whithout Pre-processing or Cross Validation features:
+
+```{r echo=TRUE}
+set.seed(12345)
+# Load or Create Model Data
+if (file.exists("modelFit_RPART.RData")) {
+    load("modelFit_RPART.RData")
+    load("modelFit_RPART_Time.RData")
+} else { 
+  modelFit_RPART_Time <- system.time (
+    modelFit_RPART <- train(classe ~.,method="rpart",data=training))
+  save(modelFit_RPART,file="modelFit_RPART.RData")
+  save(modelFit_RPART_Time,file="modelFit_RPART_Time.RData")
+}
+cat("RPART Model Elapsed Time:",modelFit_RPART_Time[[3]],"seconds")
+modelFit_RPART
+print(modelFit_RPART$finalModel)
+fancyRpartPlot(modelFit_RPART$finalModel)
+# Prediction
+predictions_RPART <- predict(modelFit_RPART,newdata=testing)
+# Confusion Matrix
+confusionMatrix(predictions_RPART,testing$classe)
+```
+
+We can see that the accuracy of the model is very low, only **49.94%**.
+Let's try to improve it using pre-processing and/or cross-validation 
+
+### 3.2 Model Using Recursive Partitioning (RPART) with Pre-processing feature.
+Consider to add Pre-processing to RPART model:
+```{r echo=TRUE}
+set.seed(12345)
+# Load or Create the Model
+if (file.exists("modelFit_RPART_Prep.RData")) {
+    load("modelFit_RPART_Prep.RData")
+    load("modelFit_RPART_Prep_Time.RData")
+} else { 
+  modelFit_RPART_Prep_Time <- system.time (
+    modelFit_RPART_Prep <- train(classe ~.,method="rpart",
+                              preProcess=c("center", "scale"),
+                              data=training))
+  save(modelFit_RPART_Prep,file="modelFit_RPART_Prep.RData")
+  save(modelFit_RPART_Prep_Time,file="modelFit_RPART_Prep_Time.RData")
+}
+cat("RPART Model with Pre-processing Elapsed Time:",
+    modelFit_RPART_Prep_Time[3],"seconds")
+modelFit_RPART_Prep
+print(modelFit_RPART_Prep$finalModel)
+fancyRpartPlot(modelFit_RPART_Prep$finalModel)
+# Prediction
+predictions_RPART_Prep <- predict(modelFit_RPART_Prep,newdata=testing)
+# Confusion Matrix
+confusionMatrix(predictions_RPART_Prep,testing$classe)
+```
+
+We can see that the accuracy of the model is the same of the original one.
+(**49.94%**) the preprocessing didn't enhance the model.
+
+
+### 3.3 Model Using Recursive Partitioning (RPART) with Cross Validation feature.
+Consider to add Cross Validation to RPART model:
+```{r echo=TRUE}
+set.seed(12345)
+# Load or Create the Model
+if (file.exists("modelFit_RPART_Cross.RData")) {
+    load("modelFit_RPART_Cross.RData")
+    load("modelFit_RPART_Cross_Time.RData")
+} else { 
+  modelFit_RPART_Cross_Time <- system.time (
+    modelFit_RPART_Cross <- train(classe ~.,method="rpart",
+                              trControl=trainControl(method = "cv", number = 3),
+                              data=training))
+  save(modelFit_RPART_Cross,file="modelFit_RPART_Cross.RData")
+  save(modelFit_RPART_Cross_Time,file="modelFit_RPART_Cross_Time.RData")
+}
+cat("RPART Model with Cross Validation Elapsed Time:",
+    modelFit_RPART_Cross_Time[3],"seconds")
+modelFit_RPART_Cross
+print(modelFit_RPART_Cross$finalModel)
+fancyRpartPlot(modelFit_RPART_Cross$finalModel)
+# Prediction
+predictions_RPART_Cross <- predict(modelFit_RPART_Cross,newdata=testing)
+# Confusion Matrix
+confusionMatrix(predictions_RPART_Cross,testing$classe)
+```
+
+We can see that the accuracy of the model is the same of the prevoius ones **49.94%**. Let's try a model using pre-processing and cross validation features.
+
+### 3.4 Model Using Recursive Partitioning (RPART) with Cross Validation and Pre-processing features.
+Consider to add Cross Validation and Pre-processing to the RPART model:
+```{r echo=TRUE}
+set.seed(12345)
+# Load or Create the Model
+if (file.exists("modelFit_RPART_CrossPrep.RData")) {
+    load("modelFit_RPART_CrossPrep.RData")
+    load("modelFit_RPART_CrossPrep_Time.RData")
+} else { 
+  modelFit_RPART_CrossPrep_Time <- system.time (
+    modelFit_RPART_CrossPrep <- train(classe ~.,method="rpart",
+                              trControl=trainControl(method = "cv", number = 3),
+                              preProcess=c("center", "scale"),
+                              data=training))
+  save(modelFit_RPART_CrossPrep,file="modelFit_RPART_CrossPrep.RData")
+  save(modelFit_RPART_CrossPrep_Time,file="modelFit_RPART_CrossPrep_Time.RData")
+}
+cat("RPART Model with Cross Validation and Pre-processing Elapsed Time:",
+    modelFit_RPART_CrossPrep_Time[3],"seconds")
+modelFit_RPART_CrossPrep
+print(modelFit_RPART_CrossPrep$finalModel)
+fancyRpartPlot(modelFit_RPART_CrossPrep$finalModel)
+# Prediction
+predictions_RPART_CrossPrep <- predict(modelFit_RPART_CrossPrep,newdata=testing)
+# Confusion Matrix
+confusionMatrix(predictions_RPART_CrossPrep,testing$classe)
+```
+
+We can see that the accuracy of the model is the same (**49.94%**), so adding cross validation and/or pre-processing didn't improve the model. Let's try to use Random Forest Method.
+
+### 3.5 Model Using Random Forest (RF) with Cross Validation feature.
+
+Using Random Forest (RF) Method with Cross Validation feature:
+```{r echo=TRUE}
+set.seed(12345)
+# Load or Create the Model
+if (file.exists("modelFit_RF_Cross.RData")) {
+  load("modelFit_RF_Cross.RData")
+  load("modelFit_RF_Cross_Time.RData")
+} else { 
+  modelFit_RF_Cross_Time <- system.time (
+    modelFit_RF_Cross <- train(classe ~.,method="rf",data=training,
+                         importance = TRUE,
+                         trControl = trainControl(method = "cv", number = 3)))
+  save(modelFit_RF_Cross,file="modelFit_RF_Cross.RData")
+  save(modelFit_RF_Cross_Time,file="modelFit_RF_Cross_Time.RData")
+}
+cat("Prediction Random Forest with Cross Validation Elapsed Time:", 
+    modelFit_RF_Cross_Time[3],"seconds")
+print(modelFit_RF_Cross$finalModel)
+# Prediction
+predictions_RF_Cross <- predict(modelFit_RF_Cross,newdata=testing)
+# Confusion Matrix
+confusionMatrix(predictions_RF_Cross,testing$classe)
+```
+
+We can see that the accuracy of the model is very high **99.38%** and the OOB is **0.87%**, so let's see if we can improve it using pre-processing and cross validation features.
+
+
+### 3.6 Model Using Random Forest (RF) with Cross Validation and Pre-processing features.
+
+Using Random Forest (RF) Method with Cross Validation and Pre-processing features:
+```{r echo=TRUE}
+set.seed(12345)
+# Load or Create the Model
+if (file.exists("modelFit_RF_CrossPrep.RData")) {
+  load("modelFit_RF_CrossPrep.RData")
+  load("modelFit_RF_CrossPrep_Time.RData")
+} else { 
+  modelFit_RF_CrossPrep_Time <- system.time (
+    modelFit_RF_CrossPrep <- train(classe ~.,method="rf",data=training,
+                         importance = TRUE,
+                         preProcess=c("center", "scale"),
+                         trControl = trainControl(method = "cv", number = 3)))
+  save(modelFit_RF_CrossPrep,file="modelFit_RF_CrossPrep.RData")
+  save(modelFit_RF_CrossPrep_Time,file="modelFit_RF_CrossPrep_Time.RData")
+}
+cat("Prediction Random Forest with Cross Validation and Pre-processing Elapsed Time:", 
+    modelFit_RF_CrossPrep_Time[3],"seconds")
+print(modelFit_RF_CrossPrep$finalModel)
+# Prediction
+predictions_RF_CrossPrep <- predict(modelFit_RF_CrossPrep,newdata=testing)
+# Confusion Matrix
+confusionMatrix(predictions_RF_CrossPrep,testing$classe)
+```
+
+We can see that the accuracy of the model decrease very little (**99.31%**) and also the OOB increases to **0.89%**.  
+
+
+### 3.7 Choosing the Best Model.
+
+Let's compare all the models:
+```{r echo=TRUE}
+
+Models_Table <- rbind(c("Model Name","Features","Elapsed Time", "Accuracy"),
+                      c("RPART 3.1","",
+                        modelFit_RPART_Time[[3]],
+                        postResample(predictions_RPART, 
+                                     testing$classe)[[1]] ),
+                      c("RPART 3.2","Pre-proc",
+                        modelFit_RPART_Prep_Time[[3]],
+                        postResample(predictions_RPART_Prep, 
+                                     testing$classe)[[1]] ),
+                      c("RPART 3.3","Cross-v",
+                        modelFit_RPART_Cross_Time[[3]],
+                        postResample(predictions_RPART_Cross, 
+                                     testing$classe)[[1]] ),
+                      c("RPART 3.4","Cross-v and Pre-proc",
+                        modelFit_RPART_CrossPrep_Time[[3]],
+                        postResample(predictions_RPART_CrossPrep,
+                                     testing$classe)[[1]] ),
+                      c("RF 3.5","Cross-v",
+                        modelFit_RF_Cross_Time[[3]],
+                        postResample(predictions_RF_Cross, 
+                                     testing$classe)[[1]] ),
+                      c("RF 3.6","Cross-v and Pre-proc",
+                        modelFit_RF_CrossPrep_Time[[3]],
+                        postResample(predictions_RF_CrossPrep, 
+                                     testing$classe)[[1]] ) )
+                      
+print(Models_Table,digits=3)
+
+```
+
+According with the table before, the best model is the one created by Random Forest (RF) Method with Cross Validation feature (RF 3.5), the accuracy of the model is **99.38%** and the OOB is **0.87%** . We will choose this model.
+
+We can see also that the cross validation and pre-processing feature didn't enhance the RPART models, only introduce changes in the elapsed time. 
+Let's see some important information about the selected model (RF 3.5):
+
+```{r echo=TRUE}
+# We can see that the error is the same from 20 trees, so we can use 
+# that information in order to decrease the running time
+plot(modelFit_RF_Cross$finalModel,
+     main="Random Forest Model with Cross Validation: Error Rate vs Number of Trees")
+
+# We can see in the following graph that using almost 27 predictors provide the
+# best accuracy
+plot(modelFit_RF_Cross,
+     main="Random Forest Model with Cross validation: Accuracy vs Selected Predictors")
+
+# Let's show and plot the important variables
+varImp(modelFit_RF_Cross,scale=FALSE)
+plot(varImp(modelFit_RF_Cross,scale=FALSE), top = 10,
+     main="Random Forest Model with Cross validation: Top-10 Important Variables")
+
+```
+
+
+## 4. Use the Best Model (Random Forest Model with Cross validation) to Predict the **classe** in the Testing Data.
+
+```{r echo=TRUE}
+predict(modelFit_RF_Cross, newdata=testing_data)
+```
+
+
+## 5. Conclusions and Expected Out-of-Sample Error.
+
+We have built a model to predict exercise form based on movement data. According with the Confusion matrices the **Random Forest algorithm with Cross Validation features** performens better than the others. The accuracy for the model was **0.9938 (95% CI: (0.9918, 0.9954))**.
+
+The expected out-of-sample error is estimated at **0.0087, or 0.87%**. The expected out-of-sample error is calculated as **1 - accuracy** for predictions made against the cross-validation set. Our Test data set comprises 20 cases. With an accuracy above **99% on our cross validation data**, we can expect that **very few, or none, of the test samples will be missclassified.**
